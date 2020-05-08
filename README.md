@@ -11,3 +11,5 @@ Model developement using various machine learning algorithms :
   * Finally, model validation by calculating misclassification rates
 
 Detailed project can be viewed at Rpubs https://rpubs.com/plashmonga/IMDB
+
+Data Source:  https://data.world/data-society/imdb-5000-movie-dataset
