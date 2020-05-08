@@ -1,4 +1,4 @@
-# IMDB-Movie-Rating-Prediction
+# IMDB Movie Rating Prediction
 
 Analyzing factors that affect a movie’s success or failure. Focus should be laid on both, entertainment of the audience (good content) and gaining tremendous profit.
 Initial Data Wrangling and cleaning to understand data and gain preliminary insights.
