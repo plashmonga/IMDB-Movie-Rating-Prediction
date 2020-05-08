@@ -1,0 +1,757 @@
+---
+title: "IMDB Movie Rating Prediction"
+author: "Plash"
+date: "2/29/2020"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+# {.tabset .tabset-fade}
+
+## Introduction
+
+To identify key factors and features that make a movie successful and eventually help in gaining a high IMDB Score. 
+
+__Approach:__
+
+* Analyzing factors that affect a movie’s success or failure. Focus should be laid on both, entertainment of the audience (good content) and gaining tremendous profit. 
+* Initial Data Wrangling and cleaning to understand data and gain preliminary insights.
+* Checking for correlations/dependency of variables, and other assumptions prior to model building and algorithm deployment.
+* Model developement using various machine learning algorithms :
+  * Dependent Variable will be IMDB Score
+  * Logistic Regression and basic Decision Trees
+  * Random Forests and Gradient Boost (Advanced Trees)
+  * Tuning parameters and other components to get good results
+* Finally, model validation by calculating misclassification rates
+
+__Data:__
+
+* This dataset is composed of 5043 movies spanning across 100 years in 66 countries. here are 2399 unique director names, and thousands of actors/actresses.
+* The IMDB Score is the response variable while the other variables are predictors
+* There are 28 features or variables in the data set
+* It has been sourced from Kaggle but the original data set has been extracted from the IMDB data website Link: https://data.world/data-society/imdb-5000-movie-dataset
+
+
+```{r , results='hide', message=FALSE, warning=FALSE}
+library(ggplot2) 
+library(ggrepel)
+library(ggthemes) 
+library(scales) 
+library(dplyr) 
+library(VIM)
+library(data.table)
+library(formattable)
+library(plotly)
+library(corrplot)
+library(GGally)
+library(caret)
+library(car)
+library(DataExplorer)
+library(flextable)
+library(knitr)
+library(stringr)
+library(formattable)
+library(corrplot)
+library(broom)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(caret)
+library(e1071)
+library(gbm)
+```
+
+## Data Cleaning
+
+* The data has been imported and studied. The response i.e. IMDB Score is numeric while there is a mix of categorical and numeric variables.
+* There are 45 duplicated rows and these observations need to be removed. The data set now contains 4998 observations.
+
+
+```{r , results='hide', message=FALSE, warning=FALSE}
+rating <- readr::read_csv("D:/Course/Projects/Pending/IMDB rating/movie_metadata.csv")
+
+dim(rating)
+str(rating)
+
+sum(duplicated(rating))
+
+rating <- rating[!duplicated(rating), ]
+
+
+summary(rating)
+
+colSums(is.na(rating))
+
+
+```
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+##Removing Special Characters in the movie_title column
+rating$movie_title <- gsub("Â", "", as.character(factor(rating$movie_title)))
+str_trim(rating$movie_title, side = "right")
+
+```
+* The movie title column was cleaned as there was some special character along with extra spaces in this particular column
+* Now we observe the genres column and observe that there are many genres in observation. To check the importance of this variable, we try to evaluate whether the genre has any relation with the imdb score. I have created a new data frame and split each string into substrings of single genre. Every genre is associated with a score and we aggregate the mean of scores for each genre and observe the following graph:
+
+```{r}
+
+#Splitting the genres
+genre.split<-rating%>%
+  select(genres,imdb_score)%>%
+  mutate(Action=ifelse(grepl("Action",genres),1,0),
+         Adventure=ifelse(grepl("Adventure",genres),1,0),
+         Animation=ifelse(grepl("Animation",genres),1,0),
+         Biography=ifelse(grepl("Biography",genres),1,0),
+         Comedy=ifelse(grepl("Comedy",genres),1,0),
+         Crime =ifelse(grepl("Crime",genres),1,0),
+         Documentary=ifelse(grepl("Documentary",genres),1,0),
+         Drama=ifelse(grepl("Drama",genres),1,0),
+         Family=ifelse(grepl("Family",genres),1,0),
+         Fantasy=ifelse(grepl("Fantasy",genres),1,0),
+         `Film-Noir`=ifelse(grepl("Film-Noir",genres),1,0),
+         History =ifelse(grepl("History",genres),1,0),
+         Horror=ifelse(grepl("Horror",genres),1,0),
+         Musical=ifelse(grepl("Musical",genres),1,0),
+         Mystery=ifelse(grepl("Mystery",genres),1,0),
+         News=ifelse(grepl("News",genres),1,0),
+         Romance=ifelse(grepl("Romance",genres),1,0),
+         `Sci-Fi`=ifelse(grepl("Sci-Fi",genres),1,0),
+         Short=ifelse(grepl("Short",genres),1,0),
+         Sport=ifelse(grepl("Sport",genres),1,0),
+         War=ifelse(grepl("War",genres),1,0),
+         Western=ifelse(grepl("Western",genres),1,0))
+
+#Genre wise movie Score
+genre.split%>%
+  tidyr::gather(Genre_Type,Binary,Action:Western)%>%
+  filter(Binary==1)%>%
+  select(-c(Binary,genres))%>%
+  group_by(Genre_Type)%>%
+  summarise(Mean_Score=mean(imdb_score))%>%
+  arrange(Mean_Score)%>%
+  ggplot(aes(x=Genre_Type,y=Mean_Score,fill=Genre_Type))+
+  geom_bar(stat="identity", color="black")+
+  coord_flip()
+
+```
+
+* It can be observed that the mean imdb score is in the range of 6-7 for most of the genres and hence it can be removed for ease in modelling purposes.
+
+```{r}
+#Removing Genres
+rating <- rating%>%select(-genres)
+```
+
+* Further, we find the number of missing values in the dataset. We observe that the variables gross and budget have a high number of missing values i.e. close to 17% and 10% respectively and hence we go ahead and remove these missing values
+
+```{r , results='hide', message=FALSE, warning=FALSE}
+missing.values <- aggr(rating, sortVars = T, prop = T, sortCombs = T, cex.lab = 1.5, cex.axis = .6, cex.numbers = 5, combined = F, gap = -.2)
+```
+
+* The new dataset contains 3809 observations and 27 features. Out of these 3809 observations, it is observed that aspect ratio has the highest number of missing values i.e. 48.
+* Imputed the missing value of aspect ration with median.
+
+
+
+```{r , results='hide', message=FALSE, warning=FALSE}
+rating <- rating[!is.na(rating$gross), ]
+rating <- rating[!is.na(rating$budget), ]
+rating <- rating[!is.na(rating$actor_2_name), ]
+rating <- rating[!is.na(rating$color), ]
+rating <- rating[!is.na(rating$actor_3_name), ]
+rating <- rating[!is.na(rating$plot_keywords), ]
+rating <- rating[!is.na(rating$language), ]
+rating <- rating[!is.na(rating$content_rating), ]
+
+
+
+summary(rating)
+colSums(is.na(rating))
+
+dim(rating)
+
+rating$aspect_ratio[is.na(rating$aspect_ratio)] <- median(rating$aspect_ratio, na.rm = TRUE)
+
+```
+
+* Compute the mean imdb score for different aspect ratios(most commonly occurring aspect ratios in the data set) and check whether this will have any significant impact on our response.
+* It can be observed that there is no significant difference between the means of these aspect ratio categories and hence we will not be including this feature in the final model
+```{r}
+mean(rating$imdb_score[rating$aspect_ratio == 1.85])
+
+mean(rating$imdb_score[rating$aspect_ratio == 2.35])
+
+mean(rating$imdb_score[rating$aspect_ratio != 1.85 & rating$aspect_ratio != 2.35])
+
+summary(rating)
+
+```
+
+
+* Imputation with column mean has been done for some of the predictors like social media likes for actors and directors and the zero’s in the predictor columns have been converted to NA’s. The data now contains 3809 observations with 26 variables. We remove the observations that have no values as we don’t have any information about them
+* Further cleaning of the content ratings column needs to be done decrease the number of categories. So the M and GP categories are clubbed into the PG category and X is a part of the NC-17 category. Categories like Approved, Not Rated, Unrated or Passed are clubbed in the R category
+* These are the final cleaning steps:
+  * Adding the Profit column based on the difference between the Budget and Gross
+  * Income. Profit = Gross – Budget
+  * Removing the color column as most of the movies(~96%+) are in color and less than 4% are black & white
+  * Removing the language column as most of the movies(~95%+) are in English and less than 5% are from other languages
+* Cleaned the country column as well by making 3 specific categories i.e. USA, UK and other regions. So most of the movies are produced in USA(79%, 3025 observations), then UK(8%, 316 observations) and finally Others category with 465 observations
+* The final, cleaned dataset has 3806 observations with 26 predictors
+```{r}
+#Removing Aspect Ratio
+rating <- subset(rating, select = -c(aspect_ratio))
+
+# replace NA with column average for facenumber_in_poster
+rating$facenumber_in_poster[is.na(rating$facenumber_in_poster)] <- round(mean(rating$facenumber_in_poster, na.rm = TRUE))
+
+# convert 0s into NAs for other predictors
+rating[,c(5,6,8,13,24,26)][rating[,c(5,6,8,13,24,26)] == 0] <- NA
+
+# impute missing value with column mean
+rating$num_critic_for_reviews[is.na(rating$num_critic_for_reviews)] <- round(mean(rating$num_critic_for_reviews, na.rm = TRUE))
+rating$duration[is.na(rating$duration)] <- round(mean(rating$duration, na.rm = TRUE))
+rating$director_facebook_likes[is.na(rating$director_facebook_likes)] <- round(mean(rating$director_facebook_likes, na.rm = TRUE))
+rating$actor_3_facebook_likes[is.na(rating$actor_3_facebook_likes)] <- round(mean(rating$actor_3_facebook_likes, na.rm = TRUE))
+rating$actor_1_facebook_likes[is.na(rating$actor_1_facebook_likes)] <- round(mean(rating$actor_1_facebook_likes, na.rm = TRUE))
+rating$cast_total_facebook_likes[is.na(rating$cast_total_facebook_likes)] <- round(mean(rating$cast_total_facebook_likes, na.rm = TRUE))
+rating$actor_2_facebook_likes[is.na(rating$actor_2_facebook_likes)] <- round(mean(rating$actor_2_facebook_likes, na.rm = TRUE))
+rating$movie_facebook_likes[is.na(rating$movie_facebook_likes)] <- round(mean(rating$movie_facebook_likes, na.rm = TRUE))
+
+
+#Content Ratings
+Movie_Ratings<-rating%>%
+  select(content_rating)%>%
+  group_by(content_rating)%>%
+  summarise(Count=n())%>%
+  select(content_rating,Count)
+
+Movie_Ratings.df<-as.data.frame(Movie_Ratings)
+
+#Remove Blank Observations
+rating <- rating[!(rating$content_rating %in% ""),]
+
+#Categorization of the content_ratings variable
+rating$content_rating[rating$content_rating == 'M']   <- 'PG' 
+rating$content_rating[rating$content_rating == 'GP']  <- 'PG' 
+rating$content_rating[rating$content_rating == 'X']   <- 'NC-17'
+rating$content_rating[rating$content_rating == 'Approved']  <- 'R' 
+rating$content_rating[rating$content_rating == 'Not Rated'] <- 'R' 
+rating$content_rating[rating$content_rating == 'Passed']    <- 'R' 
+rating$content_rating[rating$content_rating == 'Unrated']   <- 'R' 
+rating$content_rating <- factor(rating$content_rating)
+table(rating$content_rating)
+
+#Profit Column
+rating <- rating %>% 
+  mutate(profit = gross - budget,
+         return_on_investment_perc = (profit/budget)*100)
+
+#Removing Color and Language Columns
+rating <- subset(rating, select = -c(color))
+rating <- subset(rating, select = -c(language))
+
+#Cleaning the Country column into 3 categories
+levels(rating$country) <- c(levels(rating$country), "Others")
+rating$country[(rating$country != 'USA')&(rating$country != 'UK')] <- 'Others' 
+rating$country <- factor(rating$country)
+```
+
+## Exploratory Data Analysis
+
+__Analysis of IMDB Score distribution for all movies in the dataset__
+
+* This follows a Normal Distribution. It is a slightly left skewed distribution
+* The mean is close to 6.46. It has a standard deviation of 1.05. Most of the data is concentrated around the mean. There are few outliers above the 8.5 mark and below the 2.5 mark. Further analysis can be done on these movies to study the reasons for over achieving or under performing
+
+```{r}
+##Distribution of IMDB Score Variable
+ggplot(rating, aes(x=imdb_score)) +
+  geom_density(fill="red",alpha = 0.6)+coord_cartesian(xlim = c(0, 10))+
+  geom_vline(xintercept = mean(rating$imdb_score), color="blue")
+```
+
+
+```{r}
+summary(rating$imdb_score)
+
+sd(rating$imdb_score)
+```
+
+__Top 20 Profitable Movies based on Profit Value__
+
+* The graph above shows the movies that had the highest profit earned and movies like Avatar and Jurassic Park generated huge profits ~ $500 million
+
+```{r}
+profit.movie <-rating%>%
+  select(movie_title,profit)%>%
+  filter(!is.na(profit))%>%
+  arrange(desc(profit))%>%
+  top_n(20)
+
+p1 <- ggplot(profit.movie, aes(x=reorder(movie_title,profit/1000000), profit/1000000,fill=factor(movie_title))) + 
+  geom_bar(stat = "identity") +
+  ggtitle("Top Profitable Movies")+coord_flip()+xlab("Movie Name")+ylab("Profit in Million $")+theme_bw()
+
+p1
+```
+
+
+__Relationship between Profit and Budget__
+
+* It can be observed that except for the movies below the 50 million dollar mark, the top movies follow a linearly increasing trend i.e. as we increase the budget of the films, the profits increase as well. Movies like Titanic, The Avengers and Avatar had a budget of 200+ million dollar and gained high profits between 400-500 million dollar
+
+```{r}
+rating %>%
+  # filter(title_year %in% c(2000:2016)) %>%
+  arrange(desc(profit)) %>%
+  top_n(20, profit) %>%
+  ggplot(aes(x=budget/1000000, y=profit/1000000)) +
+  geom_point(size=3) +
+  geom_smooth(size=2) + 
+  geom_text_repel(aes(label=movie_title)) +
+  labs(x = "Budget in Million $", y = "Profit in Million $", title = "Top 20 Profitable Movies") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+__Profitable Movies Based on Return of Investment__
+
+* These are the top 20 movies based on its Percentage Return on Investment. Here, it can be observed that Movies with low budget had high return on investment. Movies like Extra Terrestrial and Star Wars had very low investments and had high profits hence the Return on Investments were way higher than high profit making movies like Avatar and The Avengers
+
+```{r}
+rating %>%
+  mutate(profit = gross - budget,
+         return_on_investment_perc = (profit/budget)*100) %>%
+  arrange(desc(profit)) %>%
+  top_n(20, profit) %>%
+  ggplot(aes(x=budget/1000000, y = return_on_investment_perc)) + 
+  geom_point(size = 3) + 
+  geom_smooth(size = 2) + 
+  geom_text_repel(aes(label = movie_title), size = 3) + 
+  xlab("Budget in Million $") + 
+  ylab("Percentage Return on Investment") 
+```
+
+* As it can be observed, there is a linearly increasing trend between the number of voters and imdb score for different content ratings. It is natural, as the number of people who positively vote for the movie increases, there is higher chance that movies would attract higher ratings resulting in higher scores. From the trend, it is also clear that the slopes for R and PG-13 are slightly higher than the other Ratings
+
+```{r, warning=FALSE}
+## Number of Voters and IMDB Score
+
+p<-ggplot(rating, aes(x=imdb_score, y=num_voted_users, group=content_rating))+
+geom_point(aes(color=content_rating),size=0.7)+
+ scale_color_brewer(palette="Dark2")+geom_smooth(aes(color=content_rating),se = FALSE, method = lm)+
+  xlab("IMDB Score")+ylab("Number of Voters")+labs(color = "Rating\n")
+ggplotly(p)
+
+```
+
+__Commercial Success v/s Critical Acclaim__
+
+* The below analysis is between highly grossing movies and movies with high scores. As it can be observed that there are very few movies with very high IMDB Score and high gross earnings. Avatar and Avengers are the only movies with high profits, high scores and high gross earnings. There are plenty of movies with high Critical Acclaim but it clearly does not guarantee Commercial Success
+
+```{r, warning= FALSE}
+rating %>%
+  top_n(20, profit) %>%
+  ggplot(aes(x = imdb_score, y = gross/10^6, size = profit/10^6, color = content_rating)) + 
+  geom_point() + 
+  geom_hline(aes(yintercept = 550)) + 
+  geom_vline(aes(xintercept = 7.75)) + 
+  geom_text_repel(aes(label = movie_title), size = 4) +
+  xlab("IMDB Score") + 
+  ylab("Gross Money Earned(in million dollars)") + 
+  ggtitle("Commercial Success Vs Critical Acclaim") +
+  annotate("text", x = 8.5, y = 700, label = "High IMDB Score & High Gross",size=5) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+__Yearly Trends for IMDB Score (from 1926 to 2016)__
+
+* The below trend shows the fluctuation of average yearly IMDB Scores of movies released from 1926 to 2016. There’s a clear fall in the trend over the years. The reason behind the highly fluctuating trend in the early years (i.e. between 1925 and 1960) is the lack of data points. We don’t have data for all the years and probably most of them are from highly successful movies. However, we have consistent data for the years after 1965 and it shows a declining trend in that period suggesting that there are very few highly rated in the recent years
+
+```{r}
+#Time Series for IMDB Score
+imdb.ts<-rating%>%
+  select(title_year,imdb_score,country)%>%
+  group_by(title_year)%>%
+  summarise(IMDB_Rating=mean(imdb_score))
+
+  plot.ts1<-ggplot(data=imdb.ts,aes(x=title_year,y=IMDB_Rating))+geom_point(size=3)+geom_line(size=1)+
+    geom_smooth(col="red")+xlab("Year of Release")+ylab("IMDB Rating")
+  ggplotly(plot.ts1)
+```
+
+__Yearly Trends for Return on Investments (from 1926 to 2016)__
+
+* The below trend shows the average Return on Investment in percentage for the years 1926 to 2016. We can observe that except a few outliers, the returns are quite stable over the years. Some of the years had exceptional Box Office hits and hence contributed to the high Return on Investments. Again, there is consistent data after the year 1960 and hence the better/accurate representation for years after 1960.
+
+```{r, warning= FALSE}
+#Time Series for Return on Investment
+roi.ts<-rating%>%
+  select(title_year,return_on_investment_perc)%>%
+  group_by(title_year)%>%
+  summarise(ROI=mean(return_on_investment_perc))
+plot.ts2<-ggplot(data=roi.ts,aes(x=title_year,y=ROI))+geom_point(size=3)+geom_line(size=1)+
+  geom_smooth(col="green")+xlab("Year of Release")+ylab("Return on Investment")
+ggplotly(plot.ts2)
+```
+
+__Directors with best IMDB Score__
+
+
+```{r}
+director.imdb<-rating%>%
+  select(director_name,imdb_score)%>%
+  group_by(director_name)%>%
+  summarise(Average_IMDB_Rating=mean(imdb_score))%>%
+  arrange(desc(Average_IMDB_Rating))%>%
+  top_n(20)
+
+director.df<-as.data.frame(director.imdb)
+names(director.df)[names(director.df) == "director_name"] <- "Director"
+names(director.df)[names(director.df) == "Average_IMDB_Rating"] <- "Average_IMDB_Rating"
+director.table <- formattable(director.df,list(Average_IMDB_Rating=color_bar("lightgreen")))
+director.table
+```
+
+__Reviews and IMDB Score for different countries__
+
+```{r, warning= FALSE}
+imdb.user<-ggplot(data=rating,aes(x=imdb_score,y=num_user_for_reviews,colour=factor(country)))+
+  geom_point(aes(colour= factor(country)),size=0.7)+
+  geom_smooth(se = FALSE, method = "lm")+xlab("IMDB Score")+ylab("Number of User Reviews")+
+  ylim(0,1500)+labs(color = "Country\n")
+
+ggplotly(imdb.user)
+```
+
+__Movie Facebook Likes and Actor Facebook Likes__
+
+```{r, warning=FALSE}
+ggplot(data=rating,aes(x=actor_1_facebook_likes,y=movie_facebook_likes))+
+  geom_point()+
+  geom_smooth(se = TRUE, method = "lm")+xlim(0,50000)+ylim(0,200000)
+
+```
+
+__Additional Data Cleaning__
+
+* We want to find out whether we can include director and actor names for our prediction algorithm. There are 1691 unique directors and 3682 actors. Our model will become too complex if we include these names in our final algorithm. So we remove these columns
+* Initially we had added to additional columns i.e. profit and return on investment. We will be removing these columns to avoid multicollinearity
+* Features like movie link and plot keywords will also be removed as they are inessential for making predictions
+* Finally visualized the correlation between numeric variables to check for highly correlated variables
+* It can be observed that certain variables are highly correlated i.e. for actor 1 Facebook likes and total cast Facebook likes, the correlation is 0.95. Similarly, num of users who voted is highly correlated with number of user reviews. To make the analysis simple, we remove the total cast Facebook likes and keep 2 features: actor 1 Facebook likes and other actors Facebook likes. This new column will be the summation of actor 2 and actor 3 Facebook likes
+* We also create a new feature called critical review ratio which would be the ratio between critical reviews and total number of reviews
+* We finally remove all the unnecessary columns like total Facebook likes, actor 2 Facebook likes, actor 3 Facebook likes, critical reviews and total number of reviews
+Finally, we make 4 categories based on the imdb_score variable i.e. LOW, MEDIUM, HIGH, EXCELLENT. We also remove the imdb_score variable as it will have no meaning
+
+The final cleaned data set contains 3806 observations and 14 variables
+
+```{r, warning= FALSE}
+#Unique Director and Actor Names
+sum(uniqueN(rating$director_name))
+
+sum(uniqueN(rating[, c("actor_1_name", "actor_2_name", "actor_3_name")]))
+
+#Dropping unnecessary columns
+rating<-rating%>%
+  select(-c(actor_1_name,actor_2_name,actor_3_name,director_name,
+            plot_keywords,movie_imdb_link,movie_title,profit,return_on_investment_perc))
+#Visualizing Correlation Plots
+ggcorr(rating, label = TRUE, label_round = 3, label_size = 3, size = 2, hjust = .85) +
+  ggtitle("Correlation between continuous variables") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+#Adding new columns and deleting unnecessary columns
+rating<-rating%>%
+  mutate(other_actor_facebook_likes=actor_2_facebook_likes + actor_3_facebook_likes,
+         critic_total_ratio=num_critic_for_reviews/num_user_for_reviews)%>%
+  select (-c(cast_total_facebook_likes, actor_2_facebook_likes, actor_3_facebook_likes,
+              num_critic_for_reviews, num_user_for_reviews))
+
+#Creating Score Categories
+rating <- rating %>% mutate(Rating_Category = cut(imdb_score, c(0, 4, 7, 9, 10),
+                               labels = c("LOW", "MEDIUM", "HIGH", "EXCELLENT")))
+
+movie.final<-rating%>%select(-imdb_score)
+```
+
+## Modeling {.tabset .tabset-fade }
+
+### Logistic Regression
+
+* The data has been split into training data and testing data with 80% in the training part and 20% in the testing part
+* We use the nnet package for running the Multinomial Logistic Regression. The reference level for running the logistic regression is the low category for the Rating Category variable and the formula used is ln(P(Rating Category = Excellent)/P(Rating Category = Low))=b10+b11(duration)+b12(gross)+…. ln(P(Rating Category = High)/P(Rating Category = Low))=b20+b21(duration)+b22(gross)+…. ln(P(Rating Category = Medium)/P(Rating Category = Low))=b30+b31(duration)+b32(gross)+….
+* The residual deviance for the model is 3353.43 and the AIC value is 3461.43 
+* The Predicted Classed are LOW, MEDIUM, HIGH AND EXCELLENT
+* The accuracy of the algorithm based on the predicted classes and test data classes is 73.15% which is a good value. We will explore more models to check for better prediction accuracy
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+
+##Splitting Data
+training.samples <- movie.final$Rating_Category%>% 
+  createDataPartition(p = 0.8, list = FALSE)
+train.data  <- movie.final[training.samples, ]
+test.data <- movie.final[-training.samples, ]
+
+##Multinomial Logistic Regression
+# Fit the model
+model.multi <- nnet::multinom(Rating_Category ~., data = train.data)
+
+tidy(model.multi)
+
+formattable(tidy(model.multi))
+
+# Summarize the model
+summary(model.multi)
+
+# Make predictions
+predicted.classes <- model.multi %>% predict(test.data)
+head(predicted.classes)
+
+
+```
+
+```{r}
+# Model accuracy
+mean(predicted.classes == test.data$Rating_Category)
+```
+
+### Classification Tree
+
+* Used the rpart and rpart.plot library to build our initial model. It contains the data (here train data) parameter, the formula (Rating Category ~ .) and the method parameter (here class)
+* Used the plotcp function to find the optimum Complexity Parameter to be 0.01
+* We prune the tree and plot the final tree. The parameters are such that it is class model with a response having more than two levels
+* The first feature in the tree/root node the number of voted users. The decision is made based on this condition. As one goes down the ladder, it can be observed that HIGH is in green color and the MEDIUM part is in blue. For e.g. in the leftmost node, it can be said that 48% of the movies have duration less than 120 min and budget greater than the decision node values. The probability associated with them being MEDIUM is 85%
+* Now, we do the predictions on the test dataset and calculate the accuracy of the model. The prediction accuracy is 74.07% which is good
+* To further test for better accuracy, we tune the hyperparameters :
+  * Set the minimum number of observations in the node before the algorithm perform a split (here, minsplit=20)
+  * Set the minimum number of observations in the final node (here, minbucket = round(20 / 3))
+  * Set the maximum depth of any node of the final tree (here, maxdepth = 20)
+Complexity Parameter (here, cp=0.01)
+* Based on the tuned hyper parameters, our model prediction accuracy has not changed much and it is close to 74%. We will prefer this model compared to the Multinomial Logistical Model
+
+```{r}
+rpart.fit <- rpart(Rating_Category~., data = train.data, method = 'class')
+plotcp(rpart.fit)
+
+rpart.fit.2<-prune.rpart(rpart.fit,cp=0.01)
+rpart.plot(rpart.fit.2, extra = 104)
+
+```
+```{r}
+#Prediction
+predict_unseen <-predict(rpart.fit.2, test.data, type = 'class')
+table_mat <- table(test.data$Rating_Category, predict_unseen)
+table_mat
+```
+```{r, warning= FALSE}
+accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+print(paste('Accuracy for test', accuracy_Test))
+```
+```{r}
+#3hyper parameter Tuning
+accuracy_tune <- function(fit) {
+  predict_unseen <- predict(fit, test.data, type = 'class')
+  table_mat <- table(test.data$Rating_Category, predict_unseen)
+  accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+  accuracy_Test
+}
+
+control <- rpart.control(minsplit = 20,
+                         minbucket = round(20 / 3),
+                         maxdepth = 20,
+                         cp = 0.01)
+tune_fit <- rpart(Rating_Category~., data = train.data, method = 'class', control = control)
+accuracy_tune(tune_fit)
+```
+
+### Random Forest
+
+* Random Forest is a bootstrap aggregation algorithm with random sample of predictors at each split. Aggregating a number of predictors gives a better prediction result compared to one good predictor
+* The caret package has been used for modeling purposes. Also, the Random Search algorithm will randomly search and choose a hyperparameter combination for every iteration
+* We use the trainControl function to do a grid search with 10 fold cross-validation and we train a Random Forest model to get best result for accuracy. We initially get the best result for mtry=9
+* mtry: Number of predictors drawn to feed the algorithm. By default, it is the square of the number of columns. We test the model for different mtry values from 1 to 10 and there by extract the best value which is 10 with an accuracy of 81.6%
+* maxnodes: It is the maximum number of terminal nodes for the model. We do a similar search like mtry for nodes between 5 and 30. The best value is 27 and the accuracy associated with it is 80.20%
+* ntrees: It is the number of trees in the forest. The search is made for different tree values ranging from 250 to 2000. It is was observed that the best number of trees was 600 with an accuracy of 77.24%
+* So the final model has a mtry=10, maxnodes=27 and ntrees=600. The prediction accuracy associated with this model is 77.11%
+* The variable importance plot from the algorithm clearly shows that important factors like number of users who voted, duration of the movie, budget and gross earnings have a huge impact on the IMDB score and they would be helpful during predictions
+
+```{r}
+trControl <- trainControl(method = "cv",number = 10,search = "grid")
+rf_default <- train(Rating_Category~.,data = train.data,method = "rf",metric = "Accuracy",
+                    trControl = trControl)                          
+print(rf_default)     
+```
+
+```{r}
+#Best mtry
+tuneGrid <- expand.grid(.mtry = c(1: 10))
+rf_mtry <- train(Rating_Category~.,
+                 data = train.data,
+                 method = "rf",
+                 metric = "Accuracy",
+                 tuneGrid = tuneGrid,
+                 trControl = trControl,
+                 importance = TRUE,
+                 nodesize = 14,
+                 ntree = 300)
+print(rf_mtry)
+
+best_mtry <- rf_mtry$bestTune$mtry 
+best_mtry
+
+max(rf_mtry$results$Accuracy)
+
+```
+
+```{r}
+#Best max nodes
+store_maxnode <- list()
+tuneGrid <- expand.grid(.mtry = best_mtry)
+for (maxnodes in c(5: 30)) {
+  set.seed(1234)
+  rf_maxnode <- train(Rating_Category~.,
+                      data = train.data,
+                      method = "rf",
+                      metric = "Accuracy",
+                      tuneGrid = tuneGrid,
+                      trControl = trControl,
+                      importance = TRUE,
+                      nodesize = 14,
+                      maxnodes = maxnodes,
+                      ntree = 300)
+  current_iteration <- toString(maxnodes)
+  store_maxnode[[current_iteration]] <- rf_maxnode
+}
+results_mtry <- resamples(store_maxnode)
+summary(results_mtry) #Best max node=27
+
+```
+
+```{r}
+
+#Best ntrees
+store_maxtrees <- list()
+for (ntree in c(250, 300, 350, 400, 450, 500, 550, 600, 800, 1000, 2000)) {
+  rf_maxtrees <- train(Rating_Category~.,
+                       data = train.data,
+                       method = "rf",
+                       metric = "Accuracy",
+                       tuneGrid = tuneGrid,
+                       trControl = trControl,
+                       importance = TRUE,
+                       nodesize = 14,
+                       maxnodes = 27,
+                       ntree = ntree)
+  key <- toString(ntree)
+  store_maxtrees[[key]] <- rf_maxtrees
+}
+results_tree <- resamples(store_maxtrees)
+summary(results_tree) 
+```
+
+
+```{r}
+#Best Model
+fit_rf <- train(Rating_Category~.,
+                train.data,
+                method = "rf",
+                metric = "Accuracy",
+                tuneGrid = tuneGrid,
+                trControl = trControl,
+                importance = TRUE,
+                nodesize = 14,
+                ntree = 600,
+                maxnodes = 27)
+prediction.rf <-predict(fit_rf, test.data)
+confusionMatrix(prediction.rf, test.data$Rating_Category)
+```
+
+```{r}
+
+varImp(fit_rf)
+```
+
+```{r}
+rf <- randomForest(Rating_Category ~ . , data = train.data, mtry = 4)
+
+# Get importance
+importance <- importance(rf)
+varImportance <- data.frame(Variables = row.names(importance), 
+                            Importance = round(importance[ ,'MeanDecreaseGini'],2))
+
+# Create a rank variable based on importance
+rankImportance <- varImportance %>%
+  mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+
+# Use ggplot2 to visualize the relative importance of variables
+ggplot(rankImportance, aes(x = reorder(Variables, Importance), 
+                           y = Importance, fill = Importance)) +
+  geom_bar(stat='identity') + 
+  geom_text(aes(x = Variables, y = 0.5, label = Rank),
+            hjust=0, vjust=0.55, size = 4, colour = 'red') +
+  labs(x = 'Variables') +
+  coord_flip() + 
+  theme_few()
+
+```
+
+
+
+### Gradient Boost
+
+* Another model called the Gradient Boost is fit to the training dataset. Here, the sample selection is made intelligently compared to other Algorithms. It is a slow learning algorithm and trees are grown sequentially. Decision Trees are fitted to the residuals rather than the final outcome
+* We use the same cross validation technique like Random Forests using the trainControl and finally tune the hyper parameters.
+* There are 3 parameters to be tune here: number of trees, number of splits and learning rate
+* From the final Confusion Matrix, we conclude that the Specificity for the LOW class is the highest i.e. 0.977 while the Sensitivity is highest for the MEDIUM class with a value of 0.814. The overall model has an accuracy of 79.34% which is a bit higher than the Random Forest model and certainly higher than the Multinomial Logistic Model
+
+```{r, results='hide', warning=FALSE}
+tc<-trainControl(method = "repeatedcv", number = 10)
+gbm.model = train(Rating_Category ~., data=train.data, method="gbm", trControl=tc)
+
+```
+
+```{r}
+plot(gbm.model)
+```
+
+```{r, results='hide', warning=FALSE}
+pred.gbm = predict(gbm.model, test.data)
+result = data.frame(test.data$Rating_Category, pred.gbm)
+
+```
+
+```{r}
+cm = confusionMatrix(test.data$Rating_Category, as.factor(pred.gbm))
+print(cm)
+
+```
+
+## Conclusion
+
+The Model Comparison Table is shown below:
+
+```{r}
+
+models <- data.frame("Model" = c("Logistic Regression","Classification Tree", "Random Forest", "Gradient Boosting"),
+                             "Accuracy" = c('73.15%', '74.07%','77.11%','79.34%'))
+
+models
+
+
+```
+
+
+* Decision Trees and Advanced Trees are highly interpretable models and provide higher accuracy and lower misclassification rate compared to regression models
+* We can conclude that predictors like number of users who voted for the movie, duration and budget of the movie are very important to determine the success of a movie in terms of a high IMDB Score and these would be important metrics for film makers
+* It should also be noted that commercial success and critical acclaim are 2 different aspects of the movie and the ultimate goal may differ for movie producers. Studying the profit and rate of return from the past data is a must
+
+__I have not considered any analysis for the genre of the movie. This could be a potentially important variable to measure success(not for IMDB Score). Also, text mining can be done on the description variable to obtain importance of certain words in the trailer/reviews that might contribute to the movie’s overall viewership__
